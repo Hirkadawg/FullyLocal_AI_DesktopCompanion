@@ -24,7 +24,7 @@ makes no network call of its own — there is no account, no telemetry and no cl
 - **Has a face.** A Live2D avatar on the desktop whose mouth follows the speech sounds and whose
   eyes follow the pointer. You supply the model files.
 - **Is configurable.** A settings page covers the common options; `config.yaml` holds the rest,
-  with the reasoning in comments.
+  with the reasoning in comments..
 
 ## Requirements
 
