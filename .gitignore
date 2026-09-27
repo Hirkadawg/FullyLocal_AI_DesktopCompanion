@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Everything the companion writes about its use: ratings, the activity log, the
+# facts file, notes, timers, saved prompts, exports, resets moved to the archive,
+# the avatar's position, downloaded voices and avatar models. None of it belongs
+# in the repository, and none of it should ever be committed.
+data/
+shots/
+*.log
+
+# Local settings and caches
+.rapidocr/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Working notes kept beside the code, not part of the published project.
+/ROADMAP.md
+/HANDOFF.md
+/ORCHESTRATOR.md
+/CLAUDE.md
+/.claude/

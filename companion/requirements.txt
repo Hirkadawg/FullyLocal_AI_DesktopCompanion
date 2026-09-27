@@ -1,0 +1,41 @@
+# Pinned loosely by minor version; bump deliberately, not accidentally.
+# Each block says why the dependency is here.
+
+mss>=10.0.0,<11
+Pillow>=10.0.0
+numpy>=1.26.0
+rapidocr>=3.0.0,<4
+onnxruntime>=1.20.0
+ollama>=0.6.0
+PyYAML>=6.0.0
+
+# Reads text from an app's own accessibility tree instead of pixels
+uiautomation>=2.0.20,<3
+
+# The always-on-top window. "Essentials" rather than the full PySide6
+# meta-package -- it has QtWidgets/QtGui/QtCore and skips ~700 MB of Qt modules
+# this project will never load.
+PySide6-Essentials>=6.8,<7
+
+# Speech. Piper runs on the CPU at ~15x real time, so voice costs no
+# VRAM; sounddevice bundles PortAudio for low-latency output with barge-in.
+piper-tts>=1.6,<2
+sounddevice>=0.5,<1
+
+# Speech recognition, also on the CPU. base.en transcribes an
+# utterance in ~450 ms without touching the GPU or needing CUDA libraries.
+faster-whisper>=1.2,<2
+
+# Capturing what the SPEAKERS are playing (WASAPI loopback).
+# sounddevice cannot do this -- its WasapiSettings has no loopback parameter --
+# so soundcard handles output capture while sounddevice keeps the mic/playback.
+soundcard>=0.4.4,<1
+
+# The avatar. live2d-py (MIT) wraps Live2D's Cubism SDK and bundles its
+# Core, free for private use; PyOpenGL is its one new dependency. 0.44 MB + ~30 MB.
+live2d-py>=0.7.0.4,<0.8
+PyOpenGL>=3.1.10,<4
+# ...and its mouth shapes: Piper's phoneme timings patch the voice model in
+# memory, which needs onnx. 17 MB download, ~50 MB installed.
+onnx>=1.22,<2
+

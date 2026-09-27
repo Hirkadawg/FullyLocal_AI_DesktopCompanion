@@ -1,0 +1,539 @@
+# Local AI Desktop Companion — configuration
+
+# Which display to read. mss numbers monitors[0] as the union of ALL displays,
+# so physical monitors start at 1. This ordering follows Windows' internal
+# enumeration and may NOT match the numbers in Display Settings — confirm with:
+#   python main.py --list-monitors
+#   python main.py --shot check.png
+# Changes made in the settings page (the "settings" button) are saved to
+# data/settings.yaml and override the values below. Delete that file to come
+# back to this one.
+monitor_index: 1
+
+system_prompt_file: "prompts/system.md"
+
+# Where the settings page's reset buttons (the "Your data" tab) move old data:
+# one dated folder per reset. Nothing is deleted -- move files back to undo.
+archive_folder: "data/archive"
+
+ollama:
+  # Sees images as well as text, and fits the 8 GB card with room to spare:
+  # 3.3 GB resident, all of it on the GPU (qwen3:8b took 6.2 GB and was blind).
+  # Chosen over qwen3-vl:4b-instruct, gemma4:e2b and ministral-3:3b after each
+  # ran the test suites.
+  model: "qwen3.5:4b"
+  host: "http://localhost:11434"
+  keep_alive: "10m"       # keep the model in VRAM between questions, unload when idle
+  num_ctx: 8192           # must exceed max_screen_chars/4 + prompt + answer
+  think: false            # Qwen3 reasoning blocks: latency without benefit here
+  request_timeout_s: 180.0
+  # Load the model into VRAM at startup rather than on your first question.
+  # A cold load is ~4s; with spoken answers that is 4s of silence before the
+  # companion says anything. Costs ~3.3 GB of VRAM from launch instead of from
+  # first use — keep_alive unloads it again when idle either way.
+  warm_up: true
+  # Extra sampling settings for every request. The model ships with Qwen's
+  # thinking-mode values (top_p 0.95); the app runs it with thinking off, where
+  # Qwen recommends top_p 0.8. Measured on qwen3.5:4b, these did best of four
+  # variants -- and moving answers to Qwen's temperature 0.7 made "Yes." get a
+  # page summary 7 times in 10, so the app keeps its own temperatures.
+  # Re-measured 16 Sep, with the length decided per turn: at 0.7
+  # "Yes." still recited the page 4-5 times in 24, at 0.3 never. Qwen's
+  # presence_penalty 1.5 changed nothing measurable -- 23 vs 24 of 24, no
+  # Turkish mixed with English, no loops on a log or a table -- so it stays 0.
+  # Tuned for qwen3.5:4b: revisit them if you change the model.
+  options:
+    top_p: 0.8
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 0.0
+  # A safety stop for a reply that runs on, in tokens; 0 = none. Answers need
+  # ~550 at most (a detailed Turkish one: 532); 99% of real replies were under 335,
+  # but 16 ran past 1,000 and "count to 5000" ran 91 s. Stopped here: 10 s.
+  max_reply_tokens: 1024
+
+capture:
+  mode: "monitor"         # "monitor" = whole display; "window" = active window only
+
+  # A window must have at least this much of ITSELF on the target monitor to be
+  # eligible for reading. Without it, a window that really lives on another
+  # display but overlaps this one by a few pixels can win, because it is the
+  # one with keyboard focus while you type your question.
+  min_window_on_monitor: 0.5
+
+  # Optional pin: read the window whose title or process contains this text.
+  # Leave empty for automatic selection — the window covering the largest share
+  # of this monitor wins, with ties going to the front-most. Focus is ignored on
+  # purpose, so typing a question into a terminal on the other monitor doesn't
+  # change what gets read.
+  window_match: ""
+
+  # Never read these: full-screen overlays that sit above real windows and
+  # contain nothing worth reading. The desktop and taskbar are excluded
+  # automatically by window class.
+  ignore_processes:
+    - nvidia overlay.exe
+    - nvcontainer.exe
+    - gameoverlayui.exe
+    - discord.exe
+    - textinputhost.exe
+
+# Perception sources are tried in order. The first one returning at least
+# min_chars wins, so UI Automation handles browsers/editors/documents and OCR
+# picks up everything it can't read (video, games, remote desktop, canvas apps).
+perception:
+  sources: ["uia", "ocr"]
+  min_chars: 40
+  # For questions about music ("what song is this?"), ask Windows' media controls
+  # for the exact title and artist playing in any app that reports it -- the same
+  # thing the volume flyout shows. ~0.3 s, nothing installed, stays local.
+  now_playing: true
+
+uia:
+  max_chars: 20000        # accessibility text includes off-screen content
+  max_depth: 14           # how deep to walk the accessibility tree
+  max_nodes: 3000
+  retry_delay_s: 0.6      # Chromium enables accessibility lazily; wait, then retry
+
+ocr:
+  engine: "rapidocr"
+  max_long_edge: 1920     # downscale before detection; lower = faster, less accurate
+  min_confidence: 0.5     # drop detections below this score
+
+llm:
+  # Screen text is truncated to this before being sent. It is generous because
+  # UI Automation returns whole documents rather than one screenful, and
+  # 12000 chars is ~3000 tokens, which still leaves plenty of the 8192 context
+  # for the answer. Costs no extra VRAM -- the KV cache is sized by num_ctx.
+  max_screen_chars: 12000
+  temperature: 0.3
+  stream: true            # print tokens as they arrive
+  # Save exactly what is sent to the model and what came back, one text file a
+  # day in prompt_log_folder, for checking a reply that made no sense. Off by
+  # default: it holds the screen's text. A day's file stops at 20 MB.
+  log_prompts: false
+  prompt_log_folder: "data/prompts"
+  # Send the screen's text only when your message is about it -- "what is this",
+  # a word from the page, "summarise", "kaç dişlisi var?" -- not with "how are
+  # you" or "tell me a joke". With it on every message, 35 of 48 everyday
+  # messages were pulled onto the screen. When in doubt it is sent.
+  screen_only_when_relevant: true
+  # Send only the parts of prompts/system.md a message needs: the rules for
+  # tools when a tool is offered, for audio when something was heard or asked
+  # about, for the screen when it is sent, for replies when it spoke unasked
+  #.
+  modular_system_prompt: true
+  # How long answers are: short (a sentence or two), normal (at most ~50 words),
+  # or detailed (a paragraph or two). Replies to its own remarks stay short, and
+  # "explain in detail" always gets a full answer. Decided per turn in code.
+  answer_length: "normal"
+
+# The companion refuses to capture at all if any window matching these rules is
+# visible on the target monitor — not just when it's in the foreground, since a
+# full-monitor screenshot catches background windows too.
+#
+# Blocking is loud: you get told which rule matched and why. Set enabled: false
+# to turn the guard off entirely (not recommended).
+privacy:
+  enabled: true
+
+  # Matched against the executable name, case-insensitively.
+  blocked_processes:
+    - keepass.exe
+    - keepassxc.exe
+    - 1password.exe
+    - bitwarden.exe
+    - lastpass.exe
+    - dashlane.exe
+    - protonpass.exe
+    - enpass.exe
+
+  # Python regular expressions, matched anywhere in the window title,
+  # case-insensitively. Keep these tight: an over-broad pattern here means
+  # constant false blocks.
+  blocked_title_patterns:
+    - '\bpassword'
+    - '\bseed phrase\b'
+    - '\bprivate key\b'
+    - '\brecovery (code|phrase)\b'
+    - 'incognito'
+    - 'inprivate'
+    - 'private browsing'
+
+# Ambient awareness: keep an eye on the screen without paying to read it.
+#
+# A tiny greyscale thumbnail is sampled every sample_interval_s and compared to
+# the last one — microseconds of work. Only when the screen has CHANGED and then
+# held STILL for stable_delay_s does the expensive read (UI Automation or OCR)
+# run. That debounce is what stops it reading half-scrolled pages.
+#
+# Questions then answer from that cached read when it is fresher than
+# max_cache_age_s, so there is no capture delay before the model starts.
+ambient:
+  enabled: true
+  # A full-screen grab costs ~21 ms at 1440p and that dominates; the work after
+  # it is ~0.02 ms. So this interval sets the idle CPU cost almost by itself.
+  # Lower it for faster reactions at proportionally more CPU.
+  sample_interval_s: 1.0
+  stable_delay_s: 0.8
+  change_threshold: 0.012   # mean per-pixel change (0..1) counting as "changed"
+  min_refresh_interval_s: 3.0
+  max_cache_age_s: 20.0
+  sample_long_edge: 160     # thumbnail size used for comparison
+
+# Speaking answers aloud. Piper runs on the CPU at ~15x real time, so voice
+# costs no VRAM at all — the GPU stays entirely for the language model.
+#
+# Answers are spoken sentence by sentence as they generate, rather than after
+# they finish, so the first audio arrives with the first sentence instead of
+# after the last one.
+voice:
+  enabled: true
+  engine: "piper"
+  voice: "en_GB-alba-medium"
+  voices_dir: "data/voices"
+  speed: 1.0              # 1.0 = natural pace; higher is faster
+  volume: 0.9
+  device: null            # null = system default output
+  # Voice per language, picked for each sentence from the language it is written
+  # in (a sentence too short to tell keeps the voice already speaking; a spoken
+  # question's language counts too). An English voice reading Turkish is
+  # somewhere between comic and unintelligible. A voice that isn't installed is
+  # ignored and `voice` above is kept, so this is safe to extend. Download more
+  # with piper.download_voices (see below).
+  voices_by_language:
+    en: "en_GB-alba-medium"
+    tr: "tr_TR-dfki-medium"
+  min_sentence_chars: 12
+  warm_up: true           # load the voice at startup, not on the first answer
+#
+# To add another voice (they are ~60 MB each):
+#   .venv\Scripts\python.exe -m piper.download_voices en_US-amy-medium --data-dir data/voices
+# Browse the list at https://rhasspy.github.io/piper-samples/
+
+# Listening. Hold the key, speak, release — the question is transcribed and
+# asked. Hold-to-talk rather than always-listening: the microphone is only open
+# while your finger is on a key, which Windows' own mic indicator will confirm.
+#
+# Pressing the talk key also stops any answer in progress, so the companion is
+# never speaking while the mic is open and can't transcribe itself.
+#
+# Whisper pads its input to a 30-second window, so cost is per UTTERANCE, not
+# per second. Measured here on CPU/int8:
+#     tiny.en 244 ms · base.en 453 ms · distil-small.en 1460 ms · small.en 1442 ms
+# base.en is the balance of the two. Models download on first use (~150 MB).
+#
+# SPEAKING ANOTHER LANGUAGE: the model below is multilingual and language is
+# null, so you can just speak Turkish (or anything else) with no switch to
+# flip. Measured on short Turkish commands: detected correctly 4/4, with
+# accurate transcription. Set language explicitly ("en", "tr") only if
+# auto-detect ever picks wrong — it costs a little accuracy to guess.
+speech:
+  enabled: true
+  engine: "faster-whisper"
+  model: "base"           # multilingual; "base.en" is English-only
+  device: "cpu"           # "cuda" needs cuBLAS/cuDNN DLLs that aren't installed
+  compute_type: "int8"
+  # Language for what YOU say. null = choose between `languages` below.
+  # There is also a "lang:" button in the window header to pin one live.
+  language: null
+  # Shortlist for detection. Free auto-detect over 99 languages mishears
+  # English as Polish or Turkish on a middling microphone; choosing between
+  # two candidates is far more reliable. Empty list = detect over everything.
+  # SPEECH INPUT ONLY — video listening (audio: above) still hears any language.
+  languages: ["en", "tr"]
+  beam_size: 1
+  hotkey: "ctrl+shift+a"  # HOLD to talk; must differ from ui.hotkey
+  mic_button: true        # a "mic" button in the window: click to speak, click again to send
+  preview_interval_s: 1.5 # while recording with the button, show what it heard so far this often; 0 = off
+  listen_button: true     # a "listen" button: mic stays on, each thing you say is answered after a pause
+  listen_on_start: false  # start with hands-free listening already on
+  pause_s: 0.8            # how long a pause means you've finished speaking
+  # Can the mic hear your speakers? true pauses listening while the companion
+  # talks or other sound plays; false keeps listening and lets you interrupt it
+  # by speaking. Measured on this machine (14 Sep 2026): a sentence played
+  # through the speakers left the mic at room-noise level, and the speech
+  # detector found no speech in it -- so false here. Set true if it ever starts
+  # answering itself.
+  mic_hears_speakers: false
+  echo_tail_s: 0.6        # with mic_hears_speakers: wait this long after it stops talking
+  input_device: null      # null = system default mic; else its name as Settings > Voice lists it
+  max_seconds: 30.0
+  min_seconds: 0.3        # shorter than this is a stray keypress, not speech
+  # Given silence, Whisper does not return nothing — it returns "You", or
+  # "Thank you", or whatever it heard most over quiet audio in training. Audio
+  # below this loudness never reaches the model. Raise it if a noisy room
+  # produces phantom questions; lower it if quiet speech gets ignored.
+  silence_rms: 0.004
+  # Strips non-speech before decoding. Off by default: silence_rms above already
+  # keeps silence away from the model, and the VAD was measured clipping the
+  # edges of real speech ("when was it published" -> "when was is published").
+  # Turn it on if a noisy room is causing trouble.
+  vad_filter: false
+  warm_up: true
+
+# Hearing what your speakers are playing, so it understands a video rather than
+# only reading its subtitles. It taps the OUTPUT device — it hears exactly what
+# you hear, and nothing from your microphone.
+#
+# OFF BY DEFAULT, on purpose. Reading the screen is something you asked for;
+# continuously transcribing everything audible — calls, music, whatever is in
+# another tab — is a bigger step, so you turn it on rather than discovering it.
+#
+# Cost while sound is playing: ~2.6% of a core to capture, plus ~5.4% to
+# transcribe (measured, base.en, 15s chunks). Silent chunks are dropped before
+# the model sees them, so quiet costs only the capture. Nothing is written to
+# disk; the transcript is in memory and dies with the process.
+#
+# FOREIGN-LANGUAGE VIDEO: the model below is multilingual ("base", not
+# "base.en"), and language: null auto-detects — so a Spanish or Japanese video
+# is understood without telling it anything in advance.
+#
+#   task: "transcribe"  keeps the original words; ask the companion to
+#                       translate and qwen3:8b does it, into ANY language.
+#   task: "translate"   Whisper outputs English directly — one step, but
+#                       English-only, and MUCH worse. Measured on Turkish:
+#                       base returned the Turkish untranslated; small gave
+#                       "an ancient Greek knowledge ... guess the subjects of
+#                       the stars"; transcribe + qwen3:8b gave the sentence
+#                       correctly. Transcribing is an easier job than
+#                       translating, and the local model is the better
+#                       translator. Keep "transcribe" unless you need the speed.
+#
+# The .en models are marginally better at English but cannot do this at all.
+audio:
+  enabled: true
+  model: "base"           # multilingual; "base.en" would be English-only
+  language: null          # null = auto-detect
+  task: "transcribe"      # or "translate" for direct-to-English
+  device: "cpu"
+  compute_type: "int8"
+  chunk_seconds: 15.0     # bigger = cheaper but more lag behind what was said
+  silence_rms: 0.005      # quieter than this is not transcribed at all
+  buffer_minutes: 5.0     # audio held in memory
+  keep_minutes: 10.0      # transcript held in memory
+  context_minutes: 2.0    # recent speech sent with a question, newest first with times
+  max_transcript_chars: 3000
+  output_device: null     # null = the default speaker
+
+# Speaking without being asked — commenting on what you're reading.
+#
+# OFF BY DEFAULT. This is the feature most able to make the companion
+# unbearable, and the mistake is asymmetric: one remark too many irritates far
+# more than one missed remark costs. So the limits below are deliberately
+# strict, and "Quiet" is always one click away in the tray menu.
+#
+# The model is never asked "should you speak?" — that question invites a yes.
+# Cheap deterministic rules decide whether a moment is even eligible; only then
+# is the model asked for the remark, and it can reply NOTHING to decline.
+#
+# It stays quiet while: muted, answering, speaking, within cooldown_s of its
+# last remark, over the hourly budget, within quiet_after_user_s of you
+# speaking, on a screen it has already commented on, or on a screen with less
+# than min_chars of text.
+proactive:
+  enabled: true
+  cooldown_s: 75.0         # minimum gap between remarks
+  max_per_hour: 25
+  min_chars: 400           # below this there is nothing worth an opinion
+  min_time_on_page_s: 10.0 # a page must hold your attention this long first; tab-flipping costs nothing
+  dwell_seconds: 300.0     # stay on one page this long, then scroll, and it may say one more thing
+  max_remarks_per_page: 2  # never more than this about any one page
+  quiet_after_user_s: 45.0 # silence after you speak; interrupting is the worst case
+  max_words: 25            # remarks are short by construction
+  temperature: 0.85        # remarks only; answers keep llm.temperature (at 0.3 remarks repeated word for word)
+  persona_file: "prompts/remarks.md"  # what it's like when it speaks unprompted (a placeholder persona for now)
+  speak_aloud: true        # false = text only, in the window
+  show_reason: true        # show a small line under each remark saying why it was made (never spoken)
+  remark_now_hotkey: "ctrl+shift+1"  # "say something about this" now, even when remarks are off; "" = no hotkey
+  hold_while_audio_plays: true  # wait for videos/music/calls to go quiet instead of talking over them (needs audio.enabled)
+  audio_quiet_s: 2.0       # how long the sound must have stopped first
+  # Natural moments: speak when something just ended, not merely when a page
+  # has been open long enough. Best first -- a video or music that played on
+  # the page stops; you reach the end of the page (when the app reports
+  # scrolling); you leave a page you read for a long time without a remark.
+  # A page just opened comes last.
+  natural_moments: true
+  media_min_s: 20.0        # sound this long on a page makes its end a moment (needs audio.enabled)
+  page_end_percent: 95.0   # scrolled this far = the end of the page
+  moment_wait_s: 90.0      # on a page that reports scrolling, wait this long for the end first
+  long_stay_s: 180.0       # leaving a page read this long, with no remark, is a moment
+  parting_window_s: 30.0   # ...if the remark can come within this long of leaving
+  callbacks: false         # a remark may connect to a page from an earlier day, at most once a day
+
+# Things the companion can DO, rather than just say. The model is offered these
+# on every question and decides when they fit; tool calls arrive on their own
+# chunks, so ordinary answers still stream normally.
+#
+# Everything here is local — timers and notes are files on this machine. No tool
+# touches the network.
+#
+#   get_time, stopwatch
+#   set_timer, list_timers, cancel_timer   (timers survive a restart)
+#   read_notes, search_notes               (plain Markdown you can open yourself)
+#
+# Notes are saved by the app, never by the model: say "note that ...", "note
+# that down" or "not al: ...". Timers and the stopwatch only run when your
+# message is about them. Given the choice, qwen3.5:4b saved notes and started
+# timers after "Interesting." -- so the model doesn't get the choice.
+tools:
+  enabled: true
+  max_rounds: 3           # tool rounds before giving up; more means it's looping
+
+  # Plain Markdown, UTF-8, one timestamped bullet per note — readable by
+  # Obsidian or any editor. Relative paths are resolved from the companion
+  # folder; an absolute path is used as-is and its folders are created, so you
+  # can write straight into a vault:
+  #   notes_file: "D:/Obsidian/MyVault/Companion Notes.md"
+  notes_file: "data/notes.md"
+  timers_file: "data/timers.json"
+
+# Thumbs up / down under each answer and remark in the window. A click saves the
+# rating, with the reply it rates, to a file on this machine -- nothing is sent
+# anywhere. Liked replies are what a later fine-tune would learn from. A second
+# click on the same reply replaces its rating.
+ratings:
+  enabled: true              # show the thumbs under answers and remarks
+  show_level: true           # a level beside the window's title that grows with your votes (provisional steps: 50, 80, 110...)
+  remember_moments: true     # replies you liked come back as shared moments when what you're doing relates to them
+  # Match those moments by meaning, with a small local model ("ollama pull
+  # embeddinggemma", 621 MB): a Turkish question finds an English moment, a
+  # different wording finds the same one. "" matches by shared words. Measured:
+  # words found 3 of 12 and 7 of 9 expected moments, meaning 11 of 12 and 9 of 9.
+  moments_embedding_model: "embeddinggemma"
+  file: "data/ratings.jsonl" # where ratings are kept
+
+# Letting the model SEE a screenshot, not only read the text. The image goes to
+# the local model only, after the privacy check, and is never saved.
+# Measured on qwen3.5:4b (14 Sep 2026): text alone got a photo gallery and a
+# bar chart wrong ("Monday, about 400" -- the bars said Tuesday, about 420); with
+# a 768 px screenshot both were right. First words unchanged (0.32 s), VRAM
+# unchanged (3.34 GB, all on the GPU), +362 prompt tokens, 34 ms to encode.
+vision:
+  enabled: true
+  when: "thin_text"         # "thin_text" = visual questions or too little text; "always"; "never"
+  max_image_edge: 768       # 1024 got nothing more right, for 280 more tokens
+  thin_text_chars: 400      # fewer characters than this = too little text to answer from
+  min_picture_colours: 48   # a text-poor page gets remarks only if it shows a picture
+  # Say "watch my screen" and each remark it then makes is written from a
+  # screenshot taken at that moment, used once and discarded -- until you say
+  # "stop watching" or close the app. Never saved. Asking it to look ("look at
+  # my screen", "ekranıma bak") always gets a fresh screenshot for that answer.
+  watch_remarks: true
+
+# A log of the pages you spend time on, so "what was that article I read
+# yesterday?" has an answer. Plain CSV files, one per month -- open them in
+# Notepad++ or Excel, edit or delete lines freely. Each line: date, start, end,
+# minutes, app, window title, a one-line description when one was made, and
+# whether it remarked. Never page text, never screenshots; windows on the
+# privacy list leave nothing. Nothing leaves this machine.
+# Measured: ~170 bytes a visit. Five years at 100 pages a day is 29 MB.
+activity:
+  enabled: true
+  folder: "data/activity"
+  min_seconds: 10.0   # shorter visits (flipping through tabs) aren't logged
+
+# Once a day, while you're away, the companion looks back at the activity log
+# and what you said, and keeps a few lasting facts about you in about_you.md --
+# a plain Markdown file you can edit. Every fact the model proposes is checked
+# in code before it is written: it must rest on your own words or on several
+# different pages, its words must be found in that evidence, and it must not
+# touch health, religion, politics, sexuality, money or other people. A line
+# you delete is never written again. Off until you switch it on.
+reflection:
+  enabled: false
+  file: "data/about_you.md"
+  idle_min: 10.0      # reflect after you've been away this many minutes, once a day
+  min_visits: 3       # something you do needs this many different pages behind it
+  days: 7             # how far back to look
+  max_facts: 20
+  use_in_replies: true  # give answers and remarks these facts as context
+
+# Learning where remarks are welcome -- by counting, not by a model. Replying to
+# a remark, thumbs up, or asking for one counts for that site, kind of remark
+# and moment; Esc, switching Quiet on right after one, or thumbs down counts
+# against; a remark nobody reacts to counts for nothing. Remarks become rarer
+# where they aren't wanted and a little sooner where they are -- within bounds,
+# so one Esc never silences a site. Quiet stays the off switch.
+# Kept in data/learning.json; delete it to start over.
+learning:
+  enabled: true
+  file: "data/learning.json"
+  outcome_window_s: 120.0   # a reaction this soon after a remark is the reaction to it
+  min_allowance: 0.25       # the least welcome a site can get (1 = as configured)
+  max_allowance: 1.5        # the most welcome
+
+# Music: "what key is this in?", "what are the chords?", "how fast is this?"
+# Analysed on this machine only when asked, from the last listen_seconds of
+# system audio held in memory (never saved). Needs audio.enabled. Key, tempo and
+# major/minor chords -- estimates, best on clear recordings.
+music:
+  enabled: true
+  listen_seconds: 30.0      # how much of what just played is analysed (10-60)
+
+# Follow-up questions ("explain that last part again") need the previous turns.
+# Only the questions and answers are kept -- never the screen text they were
+# based on, which would be stale by the next question and would crowd out the
+# current screen in the context budget.
+memory:
+  enabled: true
+  max_turns: 8            # oldest turns are dropped past this
+  max_chars: 4000         # ...and past this, whichever comes first
+
+# The always-on-top window (main.py --gui)
+ui:
+  # Show/hide from anywhere. Needs at least one modifier. If another app already
+  # owns the combination the companion says so on startup and stays usable from
+  # the tray icon -- pick another and restart. ctrl+alt+space is already taken
+  # on this machine, hence the default below.
+  hotkey: "ctrl+shift+space"
+  corner: "bottom-right"    # bottom-right | bottom-left | top-right | top-left
+  width: 520
+  height: 620
+  margin: 24
+  opacity: 0.96
+  font_size: 14
+  start_hidden: false       # true = start in the tray, summon with the hotkey
+
+# The avatar: a Live2D model standing on the desktop, drawn
+# with live2d-py. Clicks pass straight through it; "Move avatar" in the tray
+# makes it draggable, and where it is left is remembered in state_file. Each
+# model is a folder with a .model3.json file (a Live2D sample needs its Free
+# Material License accepted on live2d.com). Measured: +76 MB VRAM; 60 fps cost
+# 8-12% of one core.
+avatar:
+  enabled: true
+  folder: "data/avatars"
+  model: ""                 # a .model3.json file name; "" = the first found
+  height: 600               # window height in px; the width follows at 2:3
+  fps: 30
+  # The mouth takes the shape of each speech sound (a, i, u, e, o) from Piper's
+  # phoneme timings -- exact to the sample, measured -- instead of only opening
+  # with loudness. Needs the onnx package; takes effect after a restart.
+  mouth_shapes: true
+  # Head and eyes follow the mouse pointer; they look back at you when the mouse
+  # rests for 5 s, and while it speaks.
+  follow_mouse: true
+  # A mood on its face for what is being said (happy, surprised, sad, thinking),
+  # decided in code from your message and the reply -- the prompt is untouched.
+  expressions: true
+  # Hide it without switching it off: it stays loaded, so it comes back at once,
+  # and draws nothing while hidden. "Hide avatar" in the tray does the same.
+  hidden: false
+  # Hide the chat window and the avatar glides sideways into its place; show it
+  # and the avatar goes back. Moved in between, it steps only as far as it must
+  # to stop overlapping the window.
+  take_window_place: true
+  # Press this shortcut, drag the avatar where you want it (the mouse wheel or
+  # + / - resize it), then press it again or Esc. Checked free on this machine;
+  # a number key, like the "say something" shortcut, takes no browser shortcut
+  # away (ctrl+shift+m, v or d would). "" = none. After a restart.
+  move_hotkey: "ctrl+shift+2"
+  state_file: "data/avatar.json"
+
+logging:
+  level: "INFO"           # DEBUG shows per-stage timings
+  # The windowed app runs without a console, so without this file there is no
+  # record of anything that goes wrong in it. Rotates at 2 MB, keeps 2 backups.
+  # Set to "" to disable.
+  file: "data/companion.log"
